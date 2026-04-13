@@ -167,8 +167,6 @@ def main():
 
     current_ids = {item_id(x) for x in items}
 
-    # First run bootstrap:
-    # mark everything current as seen so it only posts future uploads
     if not seen:
         save_seen(current_ids)
         print("Initialized seen.json with current clothing items. Future uploads will post.")
@@ -180,7 +178,6 @@ def main():
         print("No new clothing items found.")
         return
 
-    # Oldest first so Discord posts in upload order
     new_items.reverse()
 
     for item in new_items:
@@ -189,7 +186,6 @@ def main():
         print(f"Posted: {item_name(item)} ({item_id(item)})")
         time.sleep(1)
 
-    # Keep current known IDs too
     seen.update(current_ids)
     save_seen(seen)
 
