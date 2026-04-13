@@ -1,162 +1,198 @@
-const fs = require("fs");
+import json
+import os
+import time
+from datetime import datetime
+from pathlib import Path
 
-const WEBHOOK = process.env.DISCORD_WEBHOOK_URL;
-const GROUP_ID = String(process.env.GROUP_ID || "15938842");
+import requests
 
-// change this if your current endpoint is different
-const CATALOG_API =
-  `https://catalog.roblox.com/v1/search/items/details?Category=3&CreatorType=2&CreatorTargetId=${GROUP_ID}&Limit=120&SortType=3`;
+GROUP_ID = str(os.getenv("GROUP_ID", "15938842"))
+WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
+SEEN_PATH = Path("seen.json")
 
-if (!WEBHOOK) {
-  throw new Error("Missing DISCORD_WEBHOOK_URL secret");
-}
+CATALOG_URL = (
+    "https://catalog.roblox.com/v1/search/items/details"
+    f"?Category=3&CreatorType=2&CreatorTargetId={GROUP_ID}&Limit=120&SortType=3"
+)
 
-const SEEN_FILE = "seen.json";
+session = requests.Session()
+session.headers.update({"User-Agent": "Mozilla/5.0 ACS-Clothing-Bot"})
 
-function loadSeen() {
-  try {
-    const raw = fs.readFileSync(SEEN_FILE, "utf8");
-    const parsed = JSON.parse(raw);
-    return new Set(Array.isArray(parsed) ? parsed.map(String) : []);
-  } catch {
-    return new Set();
-  }
-}
 
-function saveSeen(seen) {
-  fs.writeFileSync(SEEN_FILE, JSON.stringify([...seen], null, 2));
-}
+def load_seen():
+    if not SEEN_PATH.exists():
+        return set()
+    try:
+        data = json.loads(SEEN_PATH.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return {str(x) for x in data}
+    except Exception:
+        pass
+    return set()
 
-async function fetchJson(url) {
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0"
+
+def save_seen(seen_ids):
+    SEEN_PATH.write_text(
+        json.dumps(sorted(seen_ids, key=lambda x: int(x) if str(x).isdigit() else x), indent=2),
+        encoding="utf-8",
+    )
+
+
+def get_json(url, tries=3):
+    last_err = None
+    for _ in range(tries):
+        try:
+            r = session.get(url, timeout=20)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            last_err = e
+            time.sleep(2)
+    raise last_err
+
+
+def is_group_item(item):
+    creator_id = (
+        item.get("creatorTargetId")
+        or item.get("creatorId")
+        or (item.get("creator") or {}).get("id")
+        or (item.get("creator") or {}).get("creatorTargetId")
+    )
+    return str(creator_id) == GROUP_ID
+
+
+def item_type_name(item):
+    return str(item.get("assetTypeName") or item.get("itemType") or "").strip()
+
+
+def is_clothing(item):
+    name = item_type_name(item).lower()
+    asset_type_id = str(item.get("assetType") or item.get("assetTypeId") or "").strip()
+
+    return (
+        "shirt" in name
+        or "pants" in name
+        or "t-shirt" in name
+        or "tshirt" in name
+        or asset_type_id in {"2", "11", "12"}
+    )
+
+
+def item_id(item):
+    return str(item.get("id") or item.get("itemId") or item.get("assetId") or "")
+
+
+def item_name(item):
+    return item.get("name") or item.get("itemName") or "Unnamed item"
+
+
+def item_url(item):
+    return f"https://www.roblox.com/catalog/{item_id(item)}"
+
+
+def item_thumb(item):
+    iid = item_id(item)
+    return (
+        "https://thumbnails.roblox.com/v1/assets"
+        f"?assetIds={iid}&returnPolicy=PlaceHolder&size=420x420&format=Png&isCircular=false"
+    )
+
+
+def item_time(item):
+    for key in ("created", "updated"):
+        value = item.get(key)
+        if value:
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+            except Exception:
+                pass
+    iid = item_id(item)
+    return float(iid) if iid.isdigit() else 0.0
+
+
+def fetch_items():
+    data = get_json(CATALOG_URL)
+    items = data.get("data", [])
+    if not isinstance(items, list):
+        return []
+
+    filtered = []
+    for item in items:
+        iid = item_id(item)
+        if not iid:
+            continue
+        if not is_group_item(item):
+            continue
+        if not is_clothing(item):
+            continue
+        filtered.append(item)
+
+    filtered.sort(key=item_time, reverse=True)
+    return filtered
+
+
+def post_to_discord(item):
+    thumb_url = None
+    try:
+        thumb_data = get_json(item_thumb(item))
+        thumb_url = ((thumb_data.get("data") or [{}])[0]).get("imageUrl")
+    except Exception:
+        thumb_url = None
+
+    payload = {
+        "embeds": [
+            {
+                "title": item_name(item),
+                "url": item_url(item),
+                "description": f"New clothing upload from group {GROUP_ID}",
+                "fields": [
+                    {"name": "Type", "value": item_type_name(item) or "Clothing", "inline": True},
+                    {"name": "Item ID", "value": item_id(item), "inline": True},
+                ],
+                **({"thumbnail": {"url": thumb_url}} if thumb_url else {}),
+            }
+        ]
     }
-  });
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Request failed ${res.status}: ${text}`);
-  }
+    r = session.post(WEBHOOK_URL, json=payload, timeout=20)
+    r.raise_for_status()
 
-  return res.json();
-}
 
-function isClothing(item) {
-  const t = String(item.assetTypeName || item.itemType || "").toLowerCase();
-  return (
-    t.includes("shirt") ||
-    t.includes("pants") ||
-    t.includes("t-shirt") ||
-    t.includes("tshirt")
-  );
-}
+def main():
+    if not WEBHOOK_URL:
+        raise RuntimeError("Missing DISCORD_WEBHOOK_URL")
 
-function isFromTargetGroup(item) {
-  const creatorId =
-    item.creatorTargetId ??
-    item.creatorId ??
-    item.creator?.id ??
-    item.creator?.creatorTargetId;
+    seen = load_seen()
+    items = fetch_items()
 
-  const creatorType =
-    String(item.creatorType ?? item.creator?.type ?? "").toLowerCase();
+    current_ids = {item_id(x) for x in items}
 
-  return String(creatorId) === GROUP_ID && (creatorType === "group" || creatorType === "2" || creatorType === "");
-}
+    # First run bootstrap:
+    # mark everything current as seen so it only posts future uploads
+    if not seen:
+        save_seen(current_ids)
+        print("Initialized seen.json with current clothing items. Future uploads will post.")
+        return
 
-function getItemId(item) {
-  return String(item.id ?? item.itemId ?? item.assetId);
-}
+    new_items = [x for x in items if item_id(x) not in seen]
 
-function getItemName(item) {
-  return item.name ?? item.itemName ?? "Unnamed item";
-}
+    if not new_items:
+        print("No new clothing items found.")
+        return
 
-function getItemUrl(item) {
-  const id = getItemId(item);
-  return `https://www.roblox.com/catalog/${id}`;
-}
+    # Oldest first so Discord posts in upload order
+    new_items.reverse()
 
-function getThumbUrl(item) {
-  const id = getItemId(item);
-  return `https://thumbnails.roblox.com/v1/assets?assetIds=${id}&returnPolicy=PlaceHolder&size=420x420&format=Png&isCircular=false`;
-}
+    for item in new_items:
+        post_to_discord(item)
+        seen.add(item_id(item))
+        print(f"Posted: {item_name(item)} ({item_id(item)})")
+        time.sleep(1)
 
-async function postToDiscord(item) {
-  const thumbApi = await fetchJson(getThumbUrl(item)).catch(() => null);
-  const imageUrl = thumbApi?.data?.[0]?.imageUrl || null;
+    # Keep current known IDs too
+    seen.update(current_ids)
+    save_seen(seen)
 
-  const body = {
-    embeds: [
-      {
-        title: getItemName(item),
-        url: getItemUrl(item),
-        description: `New clothing upload from group ${GROUP_ID}`,
-        fields: [
-          {
-            name: "Type",
-            value: String(item.assetTypeName || item.itemType || "Clothing"),
-            inline: true
-          },
-          {
-            name: "Item ID",
-            value: getItemId(item),
-            inline: true
-          }
-        ],
-        image: imageUrl ? { url: imageUrl } : undefined
-      }
-    ]
-  };
 
-  const res = await fetch(WEBHOOK, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Discord webhook failed ${res.status}: ${text}`);
-  }
-}
-
-async function main() {
-  const seen = loadSeen();
-  const json = await fetchJson(CATALOG_API);
-
-  const items = Array.isArray(json.data) ? json.data : [];
-
-  const filtered = items
-    .filter(isClothing)
-    .filter(isFromTargetGroup)
-    .sort((a, b) => {
-      const ad = new Date(a.created || a.updated || a.lowestPrice || 0).getTime();
-      const bd = new Date(b.created || b.updated || b.lowestPrice || 0).getTime();
-      return bd - ad;
-    });
-
-  const fresh = filtered.filter((item) => !seen.has(getItemId(item)));
-
-  if (fresh.length === 0) {
-    console.log("No new clothing items found.");
-    return;
-  }
-
-  // oldest first so Discord posts in upload order
-  fresh.reverse();
-
-  for (const item of fresh) {
-    await postToDiscord(item);
-    seen.add(getItemId(item));
-    console.log(`Posted: ${getItemName(item)} (${getItemId(item)})`);
-  }
-
-  saveSeen(seen);
-}
-
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if __name__ == "__main__":
+    main()
