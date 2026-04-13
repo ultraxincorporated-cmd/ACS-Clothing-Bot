@@ -12,22 +12,39 @@ try:
 except:
     seen = set()
 
-url = f"https://catalog.roblox.com/v1/search/items/details?Category=3&CreatorType=2&CreatorTargetId={GROUP_ID}&Limit=30"
-
-res = requests.get(url, timeout=15)
-data = res.json()
-
 new_seen = set(seen)
 
-for item in data.get("data", []):
+def fetch_all_items():
+    items = []
+    cursor = None
+
+    while True:
+        url = (
+            f"https://catalog.roblox.com/v1/search/items/details"
+            f"?Category=3&CreatorType=2&CreatorTargetId={GROUP_ID}&Limit=30"
+        )
+
+        if cursor:
+            url += f"&Cursor={cursor}"
+
+        res = requests.get(url, timeout=15)
+        data = res.json()
+
+        items.extend(data.get("data", []))
+        cursor = data.get("nextPageCursor")
+
+        if not cursor:
+            break
+
+    return items
+
+all_items = fetch_all_items()
+
+for item in all_items:
     item_id = str(item.get("id"))
-    name = item.get("name", "New item")
-    price_status = item.get("priceStatus")
+    name = item.get("name", "New clothing")
 
-    if not item_id:
-        continue
-
-    if price_status == "Off Sale":
+    if not item_id or item_id == "None":
         continue
 
     if item_id not in seen:
