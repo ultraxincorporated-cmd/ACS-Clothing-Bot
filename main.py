@@ -5,7 +5,7 @@ import json
 WEBHOOK = os.environ["WEBHOOK"]
 GROUP_ID = 15938842
 STATE_FILE = "seen.json"
-LIMIT = 64
+LIMIT = 30
 
 try:
     with open(STATE_FILE, "r", encoding="utf-8") as f:
@@ -14,8 +14,12 @@ except:
     seen = set()
 
 url = (
-    f"https://catalog.roblox.com/v1/search/items/details"
-    f"?Category=3&CreatorType=2&CreatorTargetId={GROUP_ID}&Limit={LIMIT}"
+    "https://catalog.roblox.com/v1/search/items/details"
+    f"?Category=3"
+    f"&CreatorType=2"
+    f"&CreatorTargetId={GROUP_ID}"
+    f"&Limit={LIMIT}"
+    f"&SortType=3"
 )
 
 res = requests.get(url, timeout=20)
