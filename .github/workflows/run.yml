@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: clothing-bot-main
+  cancel-in-progress: false
+
 jobs:
   post-clothing:
     runs-on: ubuntu-latest
@@ -15,6 +19,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -23,6 +29,12 @@ jobs:
 
       - name: Install deps
         run: pip install requests
+
+      - name: Pull latest repo state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
 
       - name: Run script
         env:
@@ -34,7 +46,21 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git add seen.json
-          git diff --cached --quiet || git commit -m "update seen items"
-          git pull --rebase origin main
-          git push origin main
+
+          if git diff --cached --quiet; then
+            echo "No seen.json changes"
+            exit 0
+          fi
+
+          git commit -m "update seen items"
+
+          for i in 1 2 3; do
+            git pull --rebase origin main && git push origin HEAD:main && exit 0
+            echo "Push failed, retrying in 5s..."
+            sleep 5
+          done
+
+          echo "Failed to push after 3 attempts"
+          exit 1
