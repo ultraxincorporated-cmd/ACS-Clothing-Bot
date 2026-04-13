@@ -5,6 +5,7 @@ import json
 WEBHOOK = os.environ["WEBHOOK"]
 GROUP_ID = 15938842
 STATE_FILE = "seen.json"
+LIMIT = 64
 
 try:
     with open(STATE_FILE, "r", encoding="utf-8") as f:
@@ -12,35 +13,17 @@ try:
 except:
     seen = set()
 
+url = (
+    f"https://catalog.roblox.com/v1/search/items/details"
+    f"?Category=3&CreatorType=2&CreatorTargetId={GROUP_ID}&Limit={LIMIT}"
+)
+
+res = requests.get(url, timeout=20)
+data = res.json()
+
 new_seen = set(seen)
 
-def fetch_all_items():
-    items = []
-    cursor = None
-
-    while True:
-        url = (
-            f"https://catalog.roblox.com/v1/search/items/details"
-            f"?Category=3&CreatorType=2&CreatorTargetId={GROUP_ID}&Limit=30"
-        )
-
-        if cursor:
-            url += f"&Cursor={cursor}"
-
-        res = requests.get(url, timeout=15)
-        data = res.json()
-
-        items.extend(data.get("data", []))
-        cursor = data.get("nextPageCursor")
-
-        if not cursor:
-            break
-
-    return items
-
-all_items = fetch_all_items()
-
-for item in all_items:
+for item in data.get("data", []):
     item_id = str(item.get("id"))
     name = item.get("name", "New clothing")
 
