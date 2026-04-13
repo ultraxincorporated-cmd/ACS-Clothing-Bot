@@ -27,7 +27,6 @@ for item in data.get("data", []):
     if not item_id:
         continue
 
-    # only post items that are on sale
     if price_status == "Off Sale":
         continue
 
